@@ -1,0 +1,55 @@
+<!-- sign_legibility_test.html: shrinks "90" and "50" signs to 3-12 px digit height, without mipmaps (one bilinear sample per pixel, like the old TextMesh) and with mipmaps (area average), shown enlarged 6x.
+     Result: Docs/overlay_check/sign_legibility_test.png. Fonts are loaded from Linux paths. -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:DJB;src:url(file:///usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf)}
+@font-face{font-family:LSB;src:url(file:///usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf)}
+@font-face{font-family:LSR;src:url(file:///usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf)}
+body{background:#777;color:#fff;font:14px LSR;margin:8px}
+</style></head><body><div id=out></div><script>
+// Source: big sign face rendered at high resolution.
+function signFace(text,font,squeeze){
+  const S=512,c=document.createElement('canvas');c.width=S;c.height=S;const g=c.getContext('2d');
+  g.fillStyle='#7aa0d0';g.fillRect(0,0,S,S);               // sky-ish background
+  g.fillStyle='#cc0d0d';g.beginPath();g.arc(S/2,S/2,S/2,0,7);g.fill();
+  g.fillStyle='#f2f2f2';g.beginPath();g.arc(S/2,S/2,S/2*0.76,0,7);g.fill();
+  // digit height = 0.5 * diameter
+  g.font='400px '+font;const m=g.measureText('0');const fh=m.actualBoundingBoxAscent+m.actualBoundingBoxDescent;
+  const fs=400*(S*0.5)/fh;g.font=fs+'px '+font;
+  g.save();g.translate(S/2,S/2);g.scale(squeeze,1);g.fillStyle='#000';g.textAlign='center';g.textBaseline='middle';
+  const mm=g.measureText(text);const yoff=(mm.actualBoundingBoxAscent-mm.actualBoundingBoxDescent)/2;
+  g.fillText(text,0,yoff);g.restore();return g.getImageData(0,0,S,S);
+}
+function areaDown(img,n){ // box filter (like a mip chain), n x n output
+  const S=img.width,o=new Float32Array(n*n*3),k=S/n;
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++){let r=0,gg=0,b=0,cnt=0;
+    for(let j=Math.floor(y*k);j<Math.floor((y+1)*k);j++)for(let i=Math.floor(x*k);i<Math.floor((x+1)*k);i++){const p=(j*S+i)*4;r+=img.data[p];gg+=img.data[p+1];b+=img.data[p+2];cnt++;}
+    o.set([r/cnt,gg/cnt,b/cnt],(y*n+x)*3);}return o;}
+function pointBilinear(img,n){ // no mipmaps: one bilinear sample at each pixel centre
+  const S=img.width,o=new Float32Array(n*n*3);
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++){const u=(x+0.5)/n*S-0.5,v=(y+0.5)/n*S-0.5;const i=Math.floor(u),j=Math.floor(v),fx=u-i,fy=v-j;
+    for(let ch=0;ch<3;ch++){const P=(a,b)=>img.data[(Math.min(S-1,Math.max(0,b))*S+Math.min(S-1,Math.max(0,a)))*4+ch];
+      o[(y*n+x)*3+ch]=P(i,j)*(1-fx)*(1-fy)+P(i+1,j)*fx*(1-fy)+P(i,j+1)*(1-fx)*fy+P(i+1,j+1)*fx*fy;}}return o;}
+function show(arr,n,zoom,label){const c=document.createElement('canvas');c.width=n*zoom;c.height=n*zoom;const g=c.getContext('2d');
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++){const p=(y*n+x)*3;g.fillStyle=`rgb(${arr[p]},${arr[p+1]},${arr[p+2]})`;g.fillRect(x*zoom,y*zoom,zoom,zoom);}
+  const d=document.createElement('div');d.style.display='inline-block';d.style.margin='4px';d.style.textAlign='center';d.appendChild(c);
+  const t=document.createElement('div');t.textContent=label;d.appendChild(t);return d;}
+document.fonts.ready.then(async()=>{
+  await document.fonts.load('40px DJB');await document.fonts.load('40px LSB');await document.fonts.load('40px LSR');
+  const out=document.getElementById('out');
+  const configs=[['LSR',1,'Liberation Sans Regular (like now)'],['LSB',1,'Liberation Sans Bold'],['DJB',0.82,'DejaVu Sans Bold, 82% width']];
+  const digitPx=[3,4,5,6,7,8,10,12];
+  for(const mode of ['nomip','mip']){
+   for(const [f,sq,name] of configs){
+    const row=document.createElement('div');row.innerHTML='<b>'+(mode=='mip'?'WITH mipmaps':'NO mipmaps')+' - '+name+'</b><br>';
+    for(const txt of ['90','50']){
+      const img=signFace(txt,f,sq);
+      for(const h of digitPx){const n=Math.round(h/0.5);const arr=mode=='mip'?areaDown(img,n):pointBilinear(img,n);
+        // zoom so every sample is shown at the same on-screen size as it would be (x1) and enlarged (x6)
+        row.appendChild(show(arr,n,6,txt+' @'+h+'px'));}
+    }
+    out.appendChild(row);
+   }
+  }
+  document.title='done';
+});
+</script></body></html>

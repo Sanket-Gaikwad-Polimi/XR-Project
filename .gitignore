@@ -1,0 +1,9 @@
+# Repository-level ignore rules (Unity rules are in Adaptive_ADAS/.gitignore).
+
+# Drive logs contain participant data: NEVER push them to GitHub (privacy).
+DriveLogs/
+
+# Python (Analysis folder)
+Analysis/.venv/
+__pycache__/
+*.pyc

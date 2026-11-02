@@ -1,0 +1,89 @@
+<!-- overlay_view.html: draws the driver view (scene-builder geometry, 55 deg FOV) with the COMPACT overlay panel, as in Docs/overlay_check/view_*.png.
+     Open as overlay_view.html?w=1920&h=1080 (add &win=1 to draw the road-ahead window) in Chromium started with --allow-file-access-from-files;
+     fonts are loaded from Linux paths (Liberation Sans, metric clone of Arial). It is a drawing for checking the layout, not a Unity screenshot. -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:LS;src:url(file:///usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf)}
+@font-face{font-family:LS;font-weight:bold;src:url(file:///usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf)}
+body{margin:0;background:#222;font-family:LS}
+#cap{color:#ddd;font:14px LS;padding:6px 8px}
+.m{position:absolute;left:-9999px;top:0;white-space:pre;font-family:LS}
+</style></head><body><canvas id=c></canvas><div id=cap></div><span id=meas class=m></span><script>
+(async()=>{await document.fonts.load('12px LS');await document.fonts.load('bold 12px LS');
+const q=new URLSearchParams(location.search);const W=+q.get('w'),H=+q.get('h');
+const FOV=55*Math.PI/180,tanV=Math.tan(FOV/2),asp=W/H,E=[-0.37,1.2,-0.2];
+const c=document.getElementById('c');c.width=W;c.height=H;const g=c.getContext('2d');
+// car coords -> GUI px (camera: no rotation, looks along +z)
+function P(p){const x=p[0]-E[0],y=p[1]-E[1],z=Math.max(p[2]-E[2],0.02);return [((x/z)/(tanV*asp)+1)/2*W,(1-((y/z)/tanV+1)/2)*H];}
+function poly(pts,fill,stroke){g.beginPath();pts.map(P).forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();if(fill){g.fillStyle=fill;g.fill();}if(stroke){g.strokeStyle=stroke;g.lineWidth=1;g.stroke();}}
+function rotY(v,deg,c0){const a=deg*Math.PI/180;return [c0[0]+v[0]*Math.cos(a)+v[2]*Math.sin(a),c0[1]+v[1],c0[2]-v[0]*Math.sin(a)+v[2]*Math.cos(a)];}
+// world x relative to the ego centre: ego centre at world x 6.75 (right lane)
+const X=wx=>wx-6.75, ZF=2000, ZN=2.6;
+// sky + grass
+let gr=g.createLinearGradient(0,0,0,H/2);gr.addColorStop(0,'#6f9fd8');gr.addColorStop(1,'#bcd3ee');g.fillStyle=gr;g.fillRect(0,0,W,H/2);
+g.fillStyle='#5b7a45';g.fillRect(0,H/2,W,H/2);
+// asphalt both carriageways (x -11..11), median barrier, lane lines
+poly([[X(-11),0,ZN],[X(11),0,ZN],[X(11),0,ZF],[X(-11),0,ZF]],'#2c2c2e');
+poly([[X(-0.25),0.8,ZN],[X(0.25),0.8,ZN],[X(0.25),0.8,ZF],[X(-0.25),0.8,ZF]],'#9e9e99');
+poly([[X(0.25),0,ZN],[X(0.25),0.8,ZN],[X(0.25),0.8,ZF],[X(0.25),0,ZF]],'#8a8a85');
+for(const lx of [1.5+0.08,8.5])poly([[X(lx-0.075),0.001,ZN],[X(lx+0.075),0.001,ZN],[X(lx+0.075),0.001,ZF],[X(lx-0.075),0.001,ZF]],'#eee');
+for(let z=ZN;z<400;z+=12)poly([[X(5-0.075),0.001,z],[X(5+0.075),0.001,z],[X(5+0.075),0.001,z+4.5],[X(5-0.075),0.001,z+4.5]],'#eee');
+// speed-limit sign 100 m ahead (centre x 12.5, height 2.4, diameter 1.5)
+function disc(cx,cy,cz,r,col){const p=P([cx,cy,cz]),q2=P([cx+r,cy,cz]);g.beginPath();g.arc(p[0],p[1],Math.max(0.5,q2[0]-p[0]),0,7);g.fillStyle=col;g.fill();}
+const sz=2.25+100+0.2;poly([[X(12.46),0,sz],[X(12.54),0,sz],[X(12.54),2.4,sz],[X(12.46),2.4,sz]],'#999');
+disc(X(12.5),2.4,sz,0.75,'#cc0d0d');disc(X(12.5),2.4,sz,0.57,'#f2f2f2');
+{const p=P([X(12.5),2.4,sz]),q3=P([X(12.5),2.4+0.375,sz]);const hh=p[1]-q3[1];g.save();g.translate(p[0],p[1]);g.scale(0.85,1);g.fillStyle='#000';g.font='bold '+(hh*2/0.72)+'px LS';g.textAlign='center';g.textBaseline='middle';g.fillText('90',0,hh*0.04);g.restore();}
+// lead car, 40 m gap (rear at ego front 2.25 + 40)
+const lz=2.25+40;poly([[-0.9,0.3,lz],[0.9,0.3,lz],[0.9,0.9,lz],[-0.9,0.9,lz]],'#d9d9de','#888');
+poly([[-0.75,0.9,lz+0.6],[0.75,0.9,lz+0.6],[0.65,1.45,lz+1],[-0.65,1.45,lz+1]],'#c4c4ca','#888');
+for(const sx of [-0.62,0.62])poly([[sx-0.22,0.67,lz-0.01],[sx+0.22,0.67,lz-0.01],[sx+0.22,0.89,lz-0.01],[sx-0.22,0.89,lz-0.01]],'#5a0a0a');
+for(const sx of [-0.8,0.8])poly([[sx-0.1,0,lz+0.5],[sx+0.1,0,lz+0.5],[sx+0.1,0.3,lz+0.5],[sx-0.1,0.3,lz+0.5]],'#111');
+// ---- interior ----
+const dk='#151517',tr='#323235';
+poly([[-0.78,0.98,0.25],[0.78,0.98,0.25],[0.78,0.98,0.95],[-0.78,0.98,0.95]],dk);                    // dash top
+poly([[-0.78,0.74,0.25],[0.78,0.74,0.25],[0.78,0.98,0.25],[-0.78,0.98,0.25]],dk);                    // dash rear face
+for(const s of [-1,1])poly([[s*0.76-0.03,0.78,-0.15],[s*0.76+0.03,0.78,-0.15],[s*0.76+0.03,0.97,0.25],[s*0.76-0.03,0.97,0.25]],tr); // door trims
+for(const s of [-1,1]){const x=s*0.74;poly([[x-0.035,0.98,0.95],[x+0.035,0.98,0.95],[x+0.035,1.40,0.335],[x-0.035,1.40,0.335]],tr);} // A-pillars
+poly([[-0.82,1.38,0.38],[0.82,1.38,0.38],[0.82,1.44,0.38],[-0.82,1.44,0.38]],tr);                     // header front
+poly([[-0.82,1.38,0.26],[0.82,1.38,0.26],[0.82,1.38,0.38],[-0.82,1.38,0.38]],tr);                     // header bottom
+poly([[-0.82,1.38,0.26],[0.82,1.38,0.26],[0.82,1.44,0.26],[-0.82,1.44,0.26]],'#2c2c2f');               // header rear face
+poly([[-0.78,1.415,0.26],[0.78,1.415,0.26],[0.78,1.415,-0.18],[-0.78,1.415,-0.18]],tr);               // roof liner
+poly([[-0.57,0.97,0.33],[-0.17,0.97,0.33],[-0.17,1.11,0.33],[-0.57,1.11,0.33]],'#2a2a2d');            // binnacle face
+poly([[-0.52,0.985,0.327],[-0.22,0.985,0.327],[-0.22,1.095,0.327],[-0.52,1.095,0.327]],'#0a0f18');    // speedo screen
+{const p=P([-0.37,1.05,0.32]);g.fillStyle='#e6f2ff';g.font='bold '+Math.round(0.045/0.53/tanV/2*H*1.35)+'px LS';g.textAlign='center';g.textBaseline='middle';g.fillText('92',p[0],p[1]);g.textAlign='left';g.textBaseline='alphabetic';}
+const mc=[0,1.31,0.41];poly([[-0.14,-0.045,0],[0.14,-0.045,0],[0.14,0.045,0],[-0.14,0.045,0]].map(v=>rotY(v,16,mc)),'#151517');
+poly([[-0.13,-0.04,-0.016],[0.13,-0.04,-0.016],[0.13,0.04,-0.016],[-0.13,0.04,-0.016]].map(v=>rotY(v,16,mc)),'#9fb6d2'); // mirror glass
+const dc=[0.05,1.03,0.55],dy=Math.atan2(0.42,0.75)*180/Math.PI;
+poly([[-0.14,-0.09,0.012],[0.14,-0.09,0.012],[0.14,0.09,0.012],[-0.14,0.09,0.012]].map(v=>rotY(v,dy,dc)),'#151517');
+poly([[-0.13,-0.08,-0.003],[0.13,-0.08,-0.003],[0.13,0.08,-0.003],[-0.13,0.08,-0.003]].map(v=>rotY(v,dy,dc)),'#0a0f18'); // side display
+{const p=P(rotY([0,0.0,-0.01],dy,dc));g.fillStyle='#8cbff2';g.font=Math.round(H*0.022)+'px LS';g.textAlign='center';g.fillText('SIDE DISPLAY',p[0],p[1]);g.textAlign='left';}
+// ---- COMPACT panel: same fitting rule as DebugOverlay.cs (Liberation Sans ~ Arial metrics) ----
+const meas=document.getElementById('meas');
+function tw(html,f){meas.style.fontSize=f+'px';meas.innerHTML=html;return meas.getBoundingClientRect().width;}
+const T=["<b>188.8</b> km/h   gear R   cruise 188","Lead 188.8 km/h  <b>Braking</b>  <b>HAZARD ACTIVE</b>","Gap 188.8 m   TTC <b>88.8 s</b>   THW 88.8 s",
+ "8.88 s  <b>Distracted</b>  ·  Speedometer","Hazard seen  <b>YES</b>  +88.88 s","<b>Gamepad not detected</b>","Gaze test  RUNNING  88.8 / 88.8 s","<b>Drive finished: R = new drive</b>"];
+const pad=f=>Math.round(f*0.45),barW=f=>Math.round(f*4.5),lineH=f=>Math.ceil(f*1.15),margin=Math.max(4,Math.round(H*0.008));
+const L=[["<b>92.3</b> km/h   ","gear"," D   ","cruise"," off"],["","Lead"," 88.0 km/h  <b>Braking</b>  <span style='color:#ffb040'><b>HAZARD ACTIVE</b></span>"],
+ ["","Gap"," 31.4 m   ","TTC"," 4.2 s   ","THW"," 1.3 s"],["1.85 s  <span style='color:#40d959'><b>Attentive</b></span>  ·  Road"],["","Hazard seen","  no"],["<span style='color:#ff6060'><b>Gamepad not detected</b></span>"]];
+const n=L.length;let f,w,h;const maxW=W*0.25-margin,maxH=H*0.2-margin;
+for(f=Math.min(28,Math.max(9,Math.round(H*0.021)));f>=9;f--){w=0;for(let i=0;i<Math.max(n,6);i++){let lw=tw(T[i],f);if(i==3)lw+=barW(f)+Math.round(f*0.5);w=Math.max(w,lw);}w+=2*pad(f);h=n*lineH(f)+2*pad(f);if(w<=maxW&&h<=maxH)break;}
+const pw=Math.min(Math.ceil(w),maxW),ph=h;
+g.fillStyle='rgba(0,0,0,0.55)';g.fillRect(margin,margin,pw,ph);
+const html=parts=>parts.map((s,i)=>i%2==1?"<span style='color:#9aa4ad'>"+s+"</span>":s).join('');
+const div=document.createElement('div');div.style.cssText=`position:absolute;left:${margin+pad(f)}px;top:${margin+pad(f)}px;font-size:${f}px;line-height:${lineH(f)}px;color:#fff;white-space:pre;width:${pw-2*pad(f)}px;overflow:hidden`;
+div.innerHTML=L.map((p,i)=>i==3?`<span style="display:inline-block;width:${barW(f)}px;height:${Math.round(lineH(f)*0.6)}px;margin-right:${Math.round(f*0.5)}px;vertical-align:middle;background:linear-gradient(90deg,#40d959 0 92.5%,rgba(255,255,255,.15) 92.5%);position:relative"><i style="position:absolute;left:25%;top:0;bottom:0;width:2px;background:#fff"></i><i style="position:absolute;left:75%;top:0;bottom:0;width:2px;background:#fff"></i></span>`+p[0]:html(p)).join('\n');
+document.body.appendChild(div);
+{const mf=Math.min(120,Math.max(16,Math.round(H*0.06)));g.font='bold '+mf+'px LS';g.fillStyle='#ff2619';g.textAlign='center';g.textBaseline='middle';
+ const left=margin+pw;g.fillText('HAZARD  (t = 63.20 s)',(left+W)/2,H*0.12+mf*0.75);g.textAlign='left';g.textBaseline='alphabetic';}
+if(q.get('win')){const tx=Math.tan(12*Math.PI/180),tu=Math.tan(4*Math.PI/180),td=Math.tan(8*Math.PI/180);
+ const x0=(1-tx/(tanV*asp))/2*W,x1=(1+tx/(tanV*asp))/2*W,y0=(1-tu/tanV)/2*H,y1=(1+td/tanV)/2*H;
+ g.strokeStyle='#33ff4d';g.lineWidth=2;g.strokeRect(x0,y0,x1-x0,y1-y0);
+ g.font='bold '+Math.max(10,Math.round(H*0.013))+'px LS';g.fillStyle='#33ff4d';g.fillText('road-ahead window (Z): inside = Road, outside = OffRoad',x0+4,y0-6);}
+// limit box (dashed, NOT drawn in Unity) and the gaze dot + label example on the lead car
+g.setLineDash([6,4]);g.strokeStyle='#ffff00';g.lineWidth=1;g.strokeRect(0.5,0.5,W*0.25,H*0.2);g.setLineDash([]);
+const lp=P([0,0.7,lz]);g.beginPath();g.arc(lp[0],lp[1],6,0,7);g.fillStyle='#ff7319';g.fill();g.lineWidth=2;g.strokeStyle='#000';g.stroke();
+const lf=Math.max(10,Math.round(H*0.011));g.font='bold '+lf+'px LS';const lt='LeadCar · 1.85 s · Attentive',lw2=g.measureText(lt).width+8;
+g.fillStyle='rgba(0,0,0,0.45)';g.fillRect(lp[0]+9,lp[1]+4.5,lw2,lf*1.15+2);g.fillStyle='#fff';g.fillText(lt,lp[0]+13,lp[1]+4.5+lf);
+document.getElementById('cap').textContent=`${W}×${H} Game view (55° vertical FOV, interior on). COMPACT panel ${pw}×${ph} px at font ${f} px; limit (yellow dashed, not shown in Unity) ${Math.round(W*0.25)}×${Math.round(H*0.2)} px. Lead car 40 m ahead, speed sign 100 m ahead; red HAZARD marker as it looks for 1 s at the onset. Drawn from the scene geometry, not a Unity screenshot.`;
+document.title='done';
+})();
+</script></body></html>
