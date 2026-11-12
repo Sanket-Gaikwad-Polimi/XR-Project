@@ -29,7 +29,7 @@ Things marked (check) are not yet confirmed and are what this test finds out.
 4. **World camera settings** (Video Source menu): note the **resolution and frame rate**. Start with 30 fps.
 
 ## C. Markers and the surface (15 min)
-1. Print **4 AprilTag tag36h11 markers**. Pupil Labs' Surface Tracker documentation has a printable marker sheet; any tag36h11 images work.
+1. Print **4 AprilTag tag36h11 markers**: `Docs/markers/apriltag_tag36h11_50mm.pdf`, page 1 (IDs 0-3). Print at **100 % / Actual size**, then measure: the black square must be 50 mm. Page 2 (IDs 4-7) is spare, for example for the tablet surface later.
    - Size: black square about 5 cm.
    - Use 4 **different** markers.
    - Leave a white border around each.
