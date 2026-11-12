@@ -1,6 +1,6 @@
 # Driver twin: gaze zones and attention buffer (Step 3B–D)
 
-The driver part of the digital twin. Code: `Scripts/Twin/DriverTwin.cs`, `GazeSource.cs`, `MouseGazeSource.cs`, `EyeTrackerGazeSource.cs`, `GazeZone.cs`; debug view `Scripts/HMI/GazeDebugView.cs`; zones built in `Editor/BaseSceneBuilder.cs`.
+The driver part of the digital twin. Code: `Scripts/Twin/DriverTwin.cs`, `GazeSample.cs`, `GazeSource.cs`, `MouseGazeSource.cs`, `PupilGazeSource.cs` (eye tracker, see `Docs/EyeTracking.md`), `GazeSourceSwitch.cs`, `GazeZone.cs`; debug view `Scripts/HMI/GazeDebugView.cs`; zones built in `Editor/BaseSceneBuilder.cs`.
 
 **Basis** labels as in `BaseScene_Parameters.md`:
 - **Brief**: given in our project brief.
@@ -13,7 +13,7 @@ The driver part of the digital twin. Code: `Scripts/Twin/DriverTwin.cs`, `GazeSo
 ## 1. Data flow (every physics step, 50 Hz)
 
 ```
-gaze source ──► gaze point (viewport x, y) ──► gaze zone ──► attention buffer ──► attention state
+gaze source ──► gaze sample (world ray) ──► gaze zone ──► attention buffer ──► attention state
                                                    │
                                                    └──► glance duration, eyes-off-road time, hazard seen
 ```
@@ -21,15 +21,18 @@ gaze source ──► gaze point (viewport x, y) ──► gaze zone ──► a
 `DriverTwin` runs after the cars and `VehicleTwin` and before the logger (execution order 150), on the same 0.02 s steps.
 
 ## 2. Gaze source
-`DriverTwin.gazeSource` can be any of these. They are swappable in the Inspector.
+`DriverTwin.gazeSource` is chosen before Play with **DriveSystems → Gaze Source Switch → Source** (Mouse / PupilCapture / PupilFake).
 
 | Source | What it does | Use |
 |---|---|---|
 | `MouseGazeSource` | The mouse pointer is the gaze point. The system cursor is hidden while driving. | Home testing (drive with the keyboard, "look" with the mouse) |
-| `EyeTrackerGazeSource` | **Stub**: always "no data". Its comments describe how a tracker (Pupil Labs Core via Surface Tracker + network API, or a screen-based tracker) would plug in. The product details there are **from memory, TO CHECK** in the manufacturer's docs. | Lab, once the hardware is known |
+| `PupilGazeSource` | Pupil Core eye tracker through Pupil Capture (Surface Tracker), or the fake stream `FakePupilServer` driven by the mouse. Details: `Docs/EyeTracking.md`. | Lab (PupilCapture); home test of the tracker path (PupilFake) |
 | `ScriptedGazeSource` | Fixed sequence of zones, run by `GazeBufferTest` (T key) | Verifying the buffer rules (section 10) |
+| `EyeTrackerGazeSource` | Old stub, no longer added by the scene builder. Kept only so older scenes have no missing script. | none |
 
-Coordinates are Unity **viewport** coordinates of the driver camera: x 0 (left) to 1 (right), y 0 (bottom) to 1 (top). Outside 0..1 means off-screen.
+Every source returns a **GazeSample**: a **world ray** (origin = driver eye, direction = line of sight), a valid flag, the confidence (mouse and scripted = 1) and whether the gaze is on a display. The twin classifies the ray, so the source does not matter (mouse: ray from the driver camera through the pointer; Pupil: ray from the camera that shows the monitor the driver looks at; later XR: the headset's eye ray). A valid sample that is not on any display (pointer outside the window, or the driver looks at the real wheel) is **OffScreen**.
+
+`gaze_x`/`gaze_y` in the log are still **viewport** coordinates of the driver camera (the ray projected into it): x 0 (left) to 1 (right), y 0 (bottom) to 1 (top). Outside 0..1 means off-screen.
 
 Why an abstract class rather than a C# interface: Unity's Inspector cannot hold interface-typed fields, so `GazeSource` is an abstract `MonoBehaviour` that does the same job.
 
@@ -139,6 +142,14 @@ The test events `GazeTestStart` and `GazeTestEnd` mark the scripted test (sectio
 | eyes_off_road_s | Continuous time off Road/LeadCar (0 on the road) |
 | hazard_seen | 0 until the first ≥ 100 ms look at the lead car after onset, then 1 |
 | interior_on | 1 if the virtual interior is visible |
+| gaze_source | Mouse, Pupil, PupilFake or Scripted (during the T test) |
+| gaze_valid | 1 = usable gaze sample this step, 0 = none (no data, too old, or confidence below the threshold) |
+| gaze_confidence | Confidence of the sample (mouse and scripted 1). Empty when not valid. |
+| gaze_az_deg, gaze_el_deg | Gaze direction relative to straight ahead (driver camera = car frame): azimuth + = right, elevation + = up. Comparable across sources. |
+| gaze_display | Index of the display (Pupil surface) the gaze is on; empty = none |
+| gaze_on_display | 1 = on a display, 0 = valid gaze but off all displays (OffScreen) |
+| tracker_status | Only with the eye tracker as source: Connecting, Connected, NoData, LowConfidence, NotConnected |
+| blink | Only with the eye tracker: 1 between a blink onset and offset from Pupil's blink detector |
 
 The meta file adds `gaze_source`, every buffer parameter, the state limits (marked "our design choice"), `hazard_dwell_min_s`, and the result `hazard_seen` / `hazard_first_fixation_time_s` / `hazard_first_fixation_since_onset_s`. The meta file is rewritten when the first fixation happens.
 

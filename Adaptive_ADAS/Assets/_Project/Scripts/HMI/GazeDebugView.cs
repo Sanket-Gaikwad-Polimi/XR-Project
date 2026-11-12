@@ -9,6 +9,9 @@
 //     outside it = OffRoad.  Z toggles.
 // Colours: LeadCar orange, Mirror cyan, Speedometer yellow, SideDisplay magenta,
 //          Interior lavender, Road green, OffRoad grey (Road / OffRoad: dot only, no collider).
+// Eye tracker (Pupil or its fake): the gaze is drawn as a RING instead of a filled dot, and the
+// label adds the confidence. With the fake stream a small grey cross also marks the mouse, so the
+// delay and noise of the tracker path can be seen.
 
 using System.Collections.Generic;
 using AdaptiveADAS.Experiment;
@@ -37,7 +40,7 @@ namespace AdaptiveADAS.HMI
         public int labelMinFontSize = 10;
 
         private readonly List<Renderer> zoneRenderers = new List<Renderer>();
-        private Texture2D dotTexture;
+        private Texture2D dotTexture, ringTexture;
         private GUIStyle labelStyle;
         private readonly GUIContent labelContent = new GUIContent();
 
@@ -62,6 +65,7 @@ namespace AdaptiveADAS.HMI
             foreach (GazeZone z in FindObjectsByType<GazeZone>(FindObjectsInactive.Include, FindObjectsSortMode.None))
                 if (z.TryGetComponent(out Renderer r)) zoneRenderers.Add(r);
             dotTexture = MakeDot(32);
+            ringTexture = MakeRing(32);
             ApplyZoneVisibility();
         }
 
@@ -106,12 +110,20 @@ namespace AdaptiveADAS.HMI
             float y = (1f - vp.y) * Screen.height;   // GUI y runs top-down, viewport y bottom-up
             float s = dotSizePx;
 
+            var tracker = driverTwin.gazeSource as PupilGazeSource;
+            if (tracker != null && tracker.IsFake) DrawMouseCross();
             Color old = GUI.color;
             GUI.color = ZoneColor(driverTwin.Zone);
-            GUI.DrawTexture(new Rect(x - s * 0.5f, y - s * 0.5f, s, s), dotTexture);
+            if (tracker != null)
+            {
+                float ring = s * 1.6f;              // eye-tracker gaze: ring, a little bigger
+                GUI.DrawTexture(new Rect(x - ring * 0.5f, y - ring * 0.5f, ring, ring), ringTexture);
+            }
+            else GUI.DrawTexture(new Rect(x - s * 0.5f, y - s * 0.5f, s, s), dotTexture);
             GUI.color = old;
-            // Zone, buffer and state next to the dot.
+            // Zone, buffer and state next to the dot (+ confidence for the eye tracker).
             labelContent.text = $"{driverTwin.Zone} · {driverTwin.Buffer:F2} s · {driverTwin.State}" +
+                                (tracker != null ? $" · c {driverTwin.Sample.confidence:F2}" : "") +
                                 (driverTwin.HazardSeen ? " · hazard seen" : "");
             Vector2 size = labelStyle.CalcSize(labelContent);
             Rect r = PlaceLabel(new Vector2(x, y), s, size, DebugOverlay.PanelRect);
@@ -121,6 +133,19 @@ namespace AdaptiveADAS.HMI
             GUI.DrawTexture(r, Texture2D.whiteTexture);
             GUI.color = old;
             GUI.Label(r, labelContent, labelStyle);
+        }
+
+        /// <summary>Small grey cross at the mouse pointer (fake eye-tracker stream only).</summary>
+        private static void DrawMouseCross()
+        {
+            if (Mouse.current == null) return;
+            Vector2 m = Mouse.current.position.ReadValue();
+            float x = m.x, y = Screen.height - m.y, a = 6f;
+            Color old = GUI.color;
+            GUI.color = new Color(0.85f, 0.85f, 0.85f, 0.9f);
+            GUI.DrawTexture(new Rect(x - a, y - 0.75f, 2f * a, 1.5f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(x - 0.75f, y - a, 1.5f, 2f * a), Texture2D.whiteTexture);
+            GUI.color = old;
         }
 
         /// <summary>Green outline of the road-ahead window (only in the driver's view, not the chase camera).</summary>
@@ -183,9 +208,30 @@ namespace AdaptiveADAS.HMI
             return tex;
         }
 
+        /// <summary>White ring with a dark outline, tinted by GUI.color (eye-tracker gaze).</summary>
+        private static Texture2D MakeRing(int size)
+        {
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            float r = size * 0.5f;
+            for (int j = 0; j < size; j++)
+                for (int i = 0; i < size; i++)
+                {
+                    float d = Vector2.Distance(new Vector2(i + 0.5f, j + 0.5f), new Vector2(r, r));
+                    Color c = d > r ? Color.clear
+                        : d > r - 1.5f ? new Color(0f, 0f, 0f, 0.8f)
+                        : d > r - 5f ? Color.white
+                        : d > r - 6.5f ? new Color(0f, 0f, 0f, 0.8f)
+                        : Color.clear;
+                    tex.SetPixel(i, j, c);
+                }
+            tex.Apply();
+            return tex;
+        }
+
         private void OnDestroy()
         {
             if (dotTexture != null) Destroy(dotTexture);
+            if (ringTexture != null) Destroy(ringTexture);
         }
     }
 }

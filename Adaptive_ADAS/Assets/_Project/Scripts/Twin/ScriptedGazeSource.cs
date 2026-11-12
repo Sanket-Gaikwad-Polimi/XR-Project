@@ -2,7 +2,7 @@
 // TEST ONLY: a gaze source that "looks" at a fixed sequence of zones, e.g.
 //   3 s Road -> 1.5 s Mirror -> 2.5 s SideDisplay -> 3 s Road.
 // For each zone it produces a real gaze POINT on the screen (not just a zone name), so the
-// whole chain is tested: gaze point -> ray -> zone collider -> buffer.
+// whole chain is tested: gaze point -> ray (GazeSample) -> zone collider -> buffer.
 //   - zones with colliders: the centre of the zone, projected onto the screen; if that
 //     point does not classify as the wanted zone (something in front), a grid of points
 //     over the zone is tried;
@@ -81,13 +81,14 @@ namespace AdaptiveADAS.Twin
             return false;
         }
 
-        public override bool TryGetGaze(out Vector2 viewport)
+        public override bool TryGetGazeSample(out GazeSample sample)
         {
-            viewport = default;
+            sample = GazeSample.Invalid;
             if (!Running || session == null) return false;
             if (!TryGetPlannedZone(session.StepCount - StartStep, out GazeZoneType zone)) return false;
-            viewport = TargetPoint(zone);
-            return true;
+            // Ray from the driver camera through the target point (same path as the mouse).
+            sample = GazeSample.FromViewport(driverCamera, TargetPoint(zone));
+            return sample.valid;
         }
 
         /// <summary>A screen point (viewport) at which the driver twin sees the given zone.</summary>

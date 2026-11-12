@@ -20,6 +20,11 @@
 // checked by eye. It is placed right of the panel, never over it. Never shown to participants.
 //
 // PanelRect (static) tells GazeDebugView where the panel is, so the gaze label can avoid it.
+//
+// Eye tracker: when the Pupil source is on (real or fake), COMPACT gets one tracker line
+// (status, share of valid samples over 5 s, eyes) and FULL a "Tracker" block (version, clock sync,
+// latency, world-camera rate, accuracy). The line is our design for the lab: it should tell at a
+// glance whether the gaze data can be trusted.
 
 using System.Collections.Generic;
 using AdaptiveADAS.Experiment;
@@ -48,6 +53,8 @@ namespace AdaptiveADAS.HMI
         public InteriorToggle interior;
         public DriverTwin driverTwin;
         public GazeBufferTest gazeTest;
+        public PupilGazeSource pupil;
+        public FakePupilServer fakePupil;
 
         [Header("Display (test mode only)")]
         [Tooltip("F1 cycles COMPACT -> FULL -> OFF. In study mode nothing is drawn, whatever this says.")]
@@ -95,6 +102,7 @@ namespace AdaptiveADAS.HMI
             "Gap 188.8 m   TTC <b>88.8 s</b>   THW 88.8 s",
             "8.88 s  <b>Distracted</b>  ·  Speedometer",
             "Hazard seen  <b>YES</b>  +88.88 s",
+            "Fake  <b>Low confidence</b>  100 %  mono eye0",
             "<b>Gamepad not detected</b>",
             "Gaze test  RUNNING  88.8 / 88.8 s",
             "<b>Drive finished: R = new drive</b>",
@@ -102,7 +110,8 @@ namespace AdaptiveADAS.HMI
         private const int AttentionRow = 3;
         private const string HelpText =
             "F1 overlay mode · H this help · C/Select camera · I interior · G gaze dot · Z gaze zones · T gaze test · " +
-            "R/Start restart · E/X cruise · Backspace/Y reset · hold brake when stopped = reverse";
+            "R/Start restart · E/X cruise · Backspace/Y reset · hold brake when stopped = reverse · " +
+            "fake tracker: B blink, M markers lost, N low confidence, K fake calibration";
 
         private GUIStyle textStyle, wrapStyle, helpStyle, markerStyle;
         private readonly List<string> lines = new List<string>(8);
@@ -155,6 +164,7 @@ namespace AdaptiveADAS.HMI
             lines.Add(HazardSeenText());
 
             // Only when relevant:
+            if (PupilOn) lines.Add(TrackerShortText());
             if (driverInput != null && string.IsNullOrEmpty(driverInput.GamepadName))
                 lines.Add("<color=#ff6060><b>Gamepad not detected</b></color>");
             if (gazeTest != null && !string.IsNullOrEmpty(gazeTest.ShortStatus))
@@ -196,7 +206,7 @@ namespace AdaptiveADAS.HMI
             float maxW = Screen.width * compactMaxWidth - margin;
             float maxH = Screen.height * compactMaxHeight - margin;
             int start = Mathf.Clamp(Mathf.RoundToInt(Screen.height * compactFontPerHeight), minFontSize, maxFontSize);
-            int rows = Mathf.Max(lineCount, CompactTemplate.Length - 2);   // at least the 6 "normal" worst-case lines
+            int rows = Mathf.Max(lineCount, CompactTemplate.Length - 2);   // at least the 6 "normal" lines + the tracker line
 
             for (int f = start; f >= minFontSize; f--)
             {
@@ -314,6 +324,7 @@ namespace AdaptiveADAS.HMI
                 $"<b>Last event</b>   {(events != null ? events.LastEventText : "")}\n" +
                 $"<b>View</b>         {view}\n" +
                 $"<b>Gaze</b>         {gaze}\n" +
+                (PupilOn ? $"<b>Tracker</b>      {TrackerFullText()}\n" : "") +
                 $"<b>Log</b>          {file}";
         }
 
@@ -324,6 +335,46 @@ namespace AdaptiveADAS.HMI
             if (driverTwin == null) return "attention --";
             string zone = driverTwin.GazeValid ? driverTwin.Zone.ToString() : "no gaze";
             return $"{driverTwin.Buffer:F2} s  <color={StateHex(driverTwin.State)}><b>{driverTwin.State}</b></color>  ·  {zone}";
+        }
+
+        private bool PupilOn => pupil != null && pupil.enabled;
+
+        private static string StatusWord(PupilStatus s) => s switch
+        {
+            PupilStatus.Connected => "<color=#80ff80><b>Connected</b></color>",
+            PupilStatus.LowConfidence => "<color=#ffb040><b>Low confidence</b></color>",
+            PupilStatus.NoData => "<color=#ff6060><b>NO DATA</b></color>",
+            PupilStatus.NotConnected => "<color=#ff6060><b>NOT CONNECTED</b></color>",
+            PupilStatus.Connecting => "<color=#ffe060>connecting</color>",
+            _ => "off",
+        };
+
+        /// <summary>COMPACT tracker line, e.g. "Pupil  Connected  97 %  binocular".</summary>
+        private string TrackerShortText()
+        {
+            string share = float.IsNaN(pupil.ValidShare) ? "" : $"  {pupil.ValidShare * 100f:F0} %";
+            string eyes = string.IsNullOrEmpty(pupil.LastEyes) ? "" : "  " + pupil.LastEyes.Replace(" 3d", "").Replace(" 2d", "");
+            string extra = pupil.BlinkActive ? "  blink" : "";
+            return $"{Dim(pupil.IsFake ? "Fake" : "Pupil")}  {StatusWord(pupil.Status)}{share}{eyes}{extra}";
+        }
+
+        /// <summary>FULL tracker block (one long line, wrapped by the panel).</summary>
+        private string TrackerFullText()
+        {
+            pupil.LatencyStats(out double med, out double p95, out int n);
+            PupilClockSync c = pupil.LastSync;
+            string D(double v, string f, string unit) => double.IsNaN(v) || double.IsInfinity(v) ? "--" : v.ToString(f) + unit;
+            string text =
+                $"{pupil.SourceName} {pupil.CaptureVersion} at {pupil.Endpoint}  {StatusWord(pupil.Status)}   " +
+                $"valid {(float.IsNaN(pupil.ValidShare) ? "--" : (pupil.ValidShare * 100f).ToString("F0") + " %")} " +
+                $"(conf ≥ {pupil.confidenceThreshold:F2})   {pupil.SamplesPerSecond:F0} samples/s   eyes {(pupil.LastEyes == "" ? "--" : pupil.LastEyes)}   " +
+                $"blinks {pupil.BlinkCount}{(pupil.BlinkActive ? " (now)" : "")}\n" +
+                $"              clock offset {(c.ok ? c.offset.ToString("F4") + " s" : "--")}  round trip {(c.ok ? c.roundTripMs.ToString("F2") + " ms" : "--")}  " +
+                $"drift {D(pupil.DriftMsPerMinute(), "F2", " ms/min")}   latency median {D(med, "F0", " ms")}  p95 {D(p95, "F0", " ms")}   " +
+                $"world camera {D(pupil.MeasuredWorldFps, "F0", " fps")} measured   accuracy {D(pupil.PupilAccuracyDeg, "F2", "°")}  precision {D(pupil.PupilPrecisionDeg, "F2", "°")}";
+            if (!string.IsNullOrEmpty(pupil.UnknownSurfaces)) text += $"\n              <color=#ffb040>surfaces not configured in Unity: {pupil.UnknownSurfaces}</color>";
+            if (fakePupil != null && fakePupil.enabled) text += $"\n              {fakePupil.StateText}";
+            return text;
         }
 
         private string HazardSeenText()

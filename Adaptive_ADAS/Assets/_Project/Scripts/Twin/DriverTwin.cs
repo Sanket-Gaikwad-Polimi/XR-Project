@@ -3,9 +3,10 @@
 // Updated once per physics step (50 Hz), like VehicleTwin.
 //
 // Every step:
-//   1. Gaze point from the gaze source (mouse, eye tracker, or scripted test sequence).
-//   2. Gaze ZONE: off-screen check, then a ray from the driver camera through the gaze
-//      point against the invisible zone colliders (layer "GazeZones"). Nearest hit wins.
+//   1. Gaze sample from the gaze source (mouse, Pupil eye tracker, fake Pupil stream, or the
+//      scripted test sequence): a WORLD RAY (eye + line of sight), valid flag, confidence.
+//   2. Gaze ZONE: off-screen check, then the gaze ray against the invisible zone colliders
+//      (layer "GazeZones"). Nearest hit wins.
 //      No hit = the ray leaves the car through a window: Road if it is inside the ROAD-AHEAD
 //      WINDOW around the straight-ahead direction (default 12 deg left/right, 8 deg down,
 //      4 deg up; OUR DESIGN CHOICE), otherwise OffRoad (sky, barrier, roadside).
@@ -48,7 +49,8 @@ namespace AdaptiveADAS.Twin
         public LeadCarController leadCar;
         [Tooltip("The driver camera: the gaze ray starts here.")]
         public Camera driverCamera;
-        [Tooltip("Where the gaze comes from: MouseGazeSource (home), EyeTrackerGazeSource (lab, stub), ScriptedGazeSource (test).")]
+        [Tooltip("Where the gaze comes from: MouseGazeSource (home), PupilGazeSource (eye tracker or fake stream), " +
+                 "ScriptedGazeSource (self-test). Set at Play by GazeSourceSwitch.")]
         public GazeSource gazeSource;
 
         [Header("Gaze zones")]
@@ -93,8 +95,16 @@ namespace AdaptiveADAS.Twin
 
         // ---------------- Outputs (read by logger and overlay) ----------------
         public bool GazeValid { get; private set; }
-        /// <summary>Gaze point in viewport coordinates (0..1, origin bottom-left). NaN when not valid.</summary>
+        /// <summary>The gaze sample of this step (as returned by the gaze source).</summary>
+        public GazeSample Sample { get; private set; } = GazeSample.Invalid;
+        /// <summary>Gaze point in viewport coordinates of the DRIVER camera (0..1, origin bottom-left):
+        /// the gaze ray projected into that camera. NaN when not valid.</summary>
         public Vector2 GazeViewport { get; private set; } = new Vector2(float.NaN, float.NaN);
+        /// <summary>Gaze direction relative to the driver's straight-ahead direction (deg):
+        /// azimuth positive = right, elevation positive = up. NaN when not valid.
+        /// Comparable across mouse, eye tracker and (later) headset.</summary>
+        public float GazeAzimuthDeg { get; private set; } = float.NaN;
+        public float GazeElevationDeg { get; private set; } = float.NaN;
         public GazeZoneType Zone { get; private set; } = GazeZoneType.Road;
         /// <summary>Time in the current zone so far (s), including this step.</summary>
         public double GlanceDuration { get; private set; }
@@ -142,13 +152,14 @@ namespace AdaptiveADAS.Twin
             double dt = Time.fixedDeltaTime;
             double now = session.DriveTime;      // end of this step's interval
 
-            // ---- 1. Gaze point ----
-            Vector2 vp = default;
-            GazeValid = gazeSource != null && gazeSource.TryGetGaze(out vp);
-            GazeViewport = GazeValid ? vp : new Vector2(float.NaN, float.NaN);
+            // ---- 1. Gaze sample ----
+            GazeSample sample = GazeSample.Invalid;
+            GazeValid = gazeSource != null && gazeSource.TryGetGazeSample(out sample) && sample.valid;
+            Sample = GazeValid ? sample : GazeSample.Invalid;
+            UpdateGazeDirection();
 
             // ---- 2. Zone ----
-            GazeZoneType zone = GazeValid ? Classify(vp) : GazeZoneType.OffScreen;   // no data = treated as off-screen (our choice)
+            GazeZoneType zone = GazeValid ? Classify(sample) : GazeZoneType.OffScreen;   // no data = treated as off-screen (our choice)
             bool onRoad = GazeZone.IsOnRoad(zone);
 
             if (firstStep || zone != Zone)
@@ -260,22 +271,38 @@ namespace AdaptiveADAS.Twin
             return AttentionState.Distracted;
         }
 
-        /// <summary>Gaze point (viewport) -> zone.</summary>
+        /// <summary>Gaze sample -> zone.</summary>
+        public GazeZoneType Classify(GazeSample s)
+        {
+            if (!s.valid || !s.onDisplay) return GazeZoneType.OffScreen;
+            if (s.hasDirectZone) return s.directZone;      // a display that is itself a zone (planned, Step 5)
+            return ClassifyRay(s.worldRay);
+        }
+
+        /// <summary>Gaze point in the DRIVER camera's viewport -> zone (used by the scripted test).</summary>
         public GazeZoneType Classify(Vector2 vp)
         {
             if (vp.x < 0f || vp.x > 1f || vp.y < 0f || vp.y > 1f) return GazeZoneType.OffScreen;
             if (driverCamera == null) return GazeZoneType.Road;
+            return ClassifyRay(driverCamera.ViewportPointToRay(new Vector3(vp.x, vp.y, 0f)));
+        }
 
+        /// <summary>Gaze ray (world) -> zone. The ray may come from any camera that shares the driver's eye.</summary>
+        public GazeZoneType ClassifyRay(Ray ray)
+        {
+            if (driverCamera == null) return GazeZoneType.Road;
             // The zone colliders move with the cars. Make sure the physics engine knows their
             // current positions before casting the ray (cheap: only a few colliders moved).
             Physics.SyncTransforms();
-            Ray ray = driverCamera.ViewportPointToRay(new Vector3(vp.x, vp.y, 0f));
             if (Physics.Raycast(ray, out RaycastHit hit, maxRayDistance, gazeMask, QueryTriggerInteraction.Collide))
             {
                 GazeZone z = hit.collider.GetComponent<GazeZone>();
                 if (z != null) return z.zone;
             }
             // The ray leaves the car through a window and hits no zone: road ahead or not?
+            // Measured in the driver camera's frame = the car's frame (the camera has no pitch or yaw
+            // relative to the car). With three monitors this stays the CENTRE camera, so the window
+            // stays fixed to the car whichever monitor the ray comes from.
             Vector3 local = driverCamera.transform.InverseTransformDirection(ray.direction);
             return InRoadAheadWindow(local) ? GazeZoneType.Road : GazeZoneType.OffRoad;
         }
@@ -293,6 +320,25 @@ namespace AdaptiveADAS.Twin
             return Mathf.Abs(x) <= Mathf.Tan(roadAheadHalfWidthDeg * Mathf.Deg2Rad)
                 && y >= -Mathf.Tan(roadAheadDownDeg * Mathf.Deg2Rad)
                 && y <= Mathf.Tan(roadAheadUpDeg * Mathf.Deg2Rad);
+        }
+
+        /// <summary>GazeViewport (driver camera) and azimuth / elevation from this step's gaze ray.</summary>
+        private void UpdateGazeDirection()
+        {
+            if (!GazeValid || driverCamera == null)
+            {
+                GazeViewport = new Vector2(float.NaN, float.NaN);
+                GazeAzimuthDeg = GazeElevationDeg = float.NaN;
+                return;
+            }
+            Ray ray = Sample.worldRay;
+            Vector3 d = driverCamera.transform.InverseTransformDirection(ray.direction);
+            GazeAzimuthDeg = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
+            GazeElevationDeg = Mathf.Atan2(d.y, new Vector2(d.x, d.z).magnitude) * Mathf.Rad2Deg;
+            // Viewport of the driver camera: a point 10 m along the ray, projected. Behind the camera
+            // (impossible with the current view) = far outside the screen.
+            Vector3 v = driverCamera.WorldToViewportPoint(ray.origin + ray.direction * 10f);
+            GazeViewport = v.z > 0f ? new Vector2(v.x, v.y) : new Vector2(-9f, -9f);
         }
 
         private void UpdateHazardSeen(double now, double dt)

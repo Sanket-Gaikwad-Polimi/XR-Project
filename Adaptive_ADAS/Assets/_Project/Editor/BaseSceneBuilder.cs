@@ -741,7 +741,6 @@ namespace AdaptiveADAS.EditorTools
             // Driver part of the twin (gaze, attention buffer). Gaze source: mouse (home testing).
             var mouseGaze = go.AddComponent<MouseGazeSource>();
             mouseGaze.targetCamera = driverCam;
-            go.AddComponent<EyeTrackerGazeSource>();      // stub: drag into DriverTwin.gazeSource in the lab
             var driverTwin = go.AddComponent<DriverTwin>();
             driverTwin.session = session;
             driverTwin.events = events;
@@ -754,6 +753,24 @@ namespace AdaptiveADAS.EditorTools
             gazeView.session = session;
             gazeView.driverTwin = driverTwin;
 
+            // Eye tracker (Docs/EyeTracking.md). Both start switched OFF; GazeSourceSwitch turns them on
+            // at Play when its Source is PupilCapture or PupilFake. One surface for now: the centre
+            // monitor, shown by the driver camera (three monitors = part G).
+            var pupil = go.AddComponent<PupilGazeSource>();
+            pupil.session = session;
+            pupil.events = events;
+            pupil.surfaces = new List<PupilSurface> { new PupilSurface { surfaceName = "monitor_center", camera = driverCam } };
+            pupil.enabled = false;
+            var fakePupil = go.AddComponent<FakePupilServer>();
+            fakePupil.targetCamera = driverCam;
+            fakePupil.surfaceName = "monitor_center";
+            fakePupil.enabled = false;
+            var gazeSwitch = go.AddComponent<GazeSourceSwitch>();
+            gazeSwitch.driverTwin = driverTwin;
+            gazeSwitch.mouse = mouseGaze;
+            gazeSwitch.pupil = pupil;
+            gazeSwitch.fake = fakePupil;
+
             var logger = go.AddComponent<DriveLogger>();
             logger.session = session;
             logger.events = events;
@@ -765,6 +782,7 @@ namespace AdaptiveADAS.EditorTools
             logger.driverView = driverCam.GetComponent<DriverViewSettings>();
             logger.interior = interior;
             logger.driverTwin = driverTwin;
+            logger.pupil = pupil;
 
             // Scripted gaze test (T in test mode): fixed gaze sequence + comparison with the rules.
             var scripted = go.AddComponent<ScriptedGazeSource>();
@@ -795,6 +813,8 @@ namespace AdaptiveADAS.EditorTools
             overlay.interior = interior;
             overlay.driverTwin = driverTwin;
             overlay.gazeTest = gazeTest;
+            overlay.pupil = pupil;
+            overlay.fakePupil = fakePupil;
 
             var views = go.AddComponent<ViewSwitcher>();
             views.session = session;

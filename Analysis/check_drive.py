@@ -63,9 +63,9 @@ DEFAULT_LOG_DIR = ANALYSIS_DIR.parent / "DriveLogs"
 
 # ---- Finding and loading files ----------------------------------------------
 def main_csv_files(folder: Path):
-    """All main drive CSVs (not _events / _meta) in a folder, oldest first."""
+    """All main drive CSVs (not _events / _meta / _gaze) in a folder, oldest first."""
     files = [p for p in folder.glob("drive_*.csv")
-             if not p.stem.endswith("_events") and not p.stem.endswith("_meta")]
+             if not p.stem.endswith(("_events", "_meta", "_gaze"))]
     return sorted(files, key=lambda p: p.name)
 
 
@@ -83,7 +83,7 @@ def resolve_drive(arg):
             sys.exit(f"No drive files found in {p}")
         return files[-1]
     # Accept the _events or _meta file too: map it to the main CSV.
-    stem = p.stem.removesuffix("_events").removesuffix("_meta")
+    stem = p.stem.removesuffix("_events").removesuffix("_meta").removesuffix("_gaze")
     main = p.with_name(stem + ".csv")
     if not main.exists():
         sys.exit(f"File not found: {main}")
@@ -188,6 +188,7 @@ def check_drive(main_path: Path):
             warnings.append("No hazard onset")
         report_collisions(events, None, None)
         report_gaze(data, events, meta, None, warnings)
+        report_tracker(data, events, meta, main_path, warnings)
         print_warnings(warnings)
         return
 
@@ -307,6 +308,7 @@ def check_drive(main_path: Path):
     has_gaze, t_fix = report_gaze(data, events, meta, t0, warnings)
     if has_gaze:
         report_response_timing(rt, t_fix, meta, warnings)
+    report_tracker(data, events, meta, main_path, warnings)
     print_warnings(warnings)
 
 
@@ -474,6 +476,67 @@ def report_collisions(events, t0, t_end):
         rel = f", {c.t_s - t0:+.2f} s from onset" if t0 is not None else ""
         inside = " (during hazard)" if t0 is not None and t0 <= c.t_s <= t_end else ""
         print(f"  t = {c.t_s:.2f} s{rel}: {c.target}, relative speed {d.get('rel_speed_kmh', '?')} km/h{inside}")
+
+
+def report_tracker(data, events, meta, main_path, warnings):
+    """Eye-tracker summary (Pupil or its fake). Logs without a tracker: one line."""
+    tracker = meta.get("gaze_tracker", "")
+    if tracker in ("", "none"):
+        if "gaze_source" in data.columns:
+            print("\n-- Eye tracker --\nnot used (gaze source: " + ", ".join(sorted(data["gaze_source"].dropna().astype(str).unique())) + ")")
+        return
+    print("\n-- Eye tracker --")
+    print(f"Tracker: {tracker}   Capture version: {meta.get('pupil_capture_version', '--')}   at {meta.get('pupil_endpoint', '--')}")
+    if "FakePupilServer" in tracker:
+        warnings.append("Gaze came from the FAKE Pupil stream (mouse), not from a real eye tracker.")
+    print(f"Eyes: expected {meta.get('tracker_eyes_expected', '--')}, observed {meta.get('tracker_eyes_observed', '--') or '--'}")
+    print(f"World camera: entered {meta.get('world_camera_resolution_entered') or '--'} @ "
+          f"{meta.get('world_camera_fps_entered') or '--'} fps, measured {num(meta.get('world_camera_fps_measured'), '{:.1f}', ' fps')}")
+    print(f"Confidence threshold {meta.get('confidence_threshold', '--')}, max sample age {meta.get('max_sample_age_s', '--')} s")
+    print(f"Pupil Capture accuracy {num(meta.get('pupil_accuracy_deg'), '{:.2f}', ' deg')}, "
+          f"precision {num(meta.get('pupil_precision_deg'), '{:.2f}', ' deg')}  (calibration: {meta.get('calibration_method') or '--'})")
+    print(f"Clock sync: {meta.get('clock_sync_count', '0')} syncs; first [{meta.get('clock_sync_first', '') or '--'}]; "
+          f"drift {num(meta.get('clock_drift_ms_per_min'), '{:.3f}', ' ms/min')}")
+    print(f"Latency (estimate): median {num(meta.get('latency_ms_median'), '{:.1f}', ' ms')}, "
+          f"95th percentile {num(meta.get('latency_ms_p95'), '{:.1f}', ' ms')}  (n = {meta.get('latency_samples', '0')})")
+
+    pupil_rows = data[data["gaze_source"].isin(["Pupil", "PupilFake"])] if "gaze_source" in data.columns else data.iloc[0:0]
+    if len(pupil_rows):
+        valid = pupil_rows["gaze_valid"].mean() * 100.0
+        print(f"Physics steps with the tracker as source: {len(pupil_rows)}, valid gaze in {valid:.1f} %")
+        if "tracker_status" in pupil_rows.columns:
+            shares = pupil_rows["tracker_status"].value_counts(normalize=True) * 100.0
+            print("Tracker status over the drive: " + ", ".join(f"{k} {v:.1f} %" for k, v in shares.items()))
+        if valid < 80.0:
+            warnings.append(f"Valid eye-tracker gaze in only {valid:.1f} % of the steps (invalid = OffScreen, drains the buffer).")
+
+    blinks = events[events["event"] == "PupilBlink"] if len(events) else events
+    if len(blinks):
+        onsets = (blinks["target"] == "onset").sum()
+        print(f"Blink events: {onsets} onsets, {(blinks['target'] == 'offset').sum()} offsets")
+    status_events = events[events["event"] == "TrackerStatus"] if len(events) else events
+    lost = status_events[status_events["target"].isin(["NoData", "NotConnected"])] if len(status_events) else status_events
+    if len(lost):
+        warnings.append(f"Tracker lost data or connection {len(lost)} time(s) (TrackerStatus events).")
+
+    gaze_path = main_path.with_name(main_path.stem + "_gaze.csv")
+    if gaze_path.exists():
+        raw = pd.read_csv(gaze_path)
+        if len(raw):
+            unique = raw.drop_duplicates(subset="pupil_time_s")
+            span = unique["local_time_s"].max() - unique["local_time_s"].min()
+            rate = len(unique) / span if span > 0 else float("nan")
+            on = raw[raw["on_surf"] == 1]
+            print(f"Raw gaze file: {len(unique)} gaze points ({num(rate, '{:.0f}', '/s')}), "
+                  f"{len(raw)} rows over surfaces {', '.join(sorted(raw['surface'].astype(str).unique()))}; "
+                  f"on a surface {100.0 * len(on) / len(raw):.1f} % of rows")
+            if len(raw["gaze_topic"].dropna()):
+                kinds = raw.drop_duplicates(subset="pupil_time_s")["gaze_topic"].value_counts(normalize=True) * 100.0
+                print("Gaze topics: " + ", ".join(f"{k} {v:.1f} %" for k, v in kinds.items()))
+        else:
+            print("Raw gaze file is empty (no data received).")
+    else:
+        print("No raw gaze file found.")
 
 
 def print_warnings(warnings):
